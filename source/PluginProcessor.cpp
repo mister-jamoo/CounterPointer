@@ -180,7 +180,7 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer,
                     // Check if nextBeatSamples 82200 >= 88200 AND 88200 < 82000 + buffer.getNumSamples() (82000 + 64) 82064.
                     if(nextBeatSamples >= currentSample && nextBeatSamples < currentSample + buffer.getNumSamples()){
                         auto offsetInBuffer = static_cast<int>(nextBeatSamples - currentSample);
-                        midiMessages.addEvent(juce::MidiMessage::noteOn(1, , 1.0f), offsetInBuffer);
+                        midiMessages.addEvent(juce::MidiMessage::noteOn(1, 60, 1.0f), offsetInBuffer);
                     }
                 }
             }
