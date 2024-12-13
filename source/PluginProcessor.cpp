@@ -3,14 +3,15 @@
 
 //==============================================================================
 PluginProcessor::PluginProcessor()
-     : AudioProcessor (BusesProperties()
-                     #if ! JucePlugin_IsMidiEffect
-                      #if ! JucePlugin_IsSynth
-                       .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
-                      #endif
-                       .withOutput ("Output", juce::AudioChannelSet::stereo(), true)
-                     #endif
-                       )
+    : AudioProcessor (BusesProperties()
+#if !JucePlugin_IsMidiEffect
+    #if !JucePlugin_IsSynth
+                          .withInput ("Input", juce::AudioChannelSet::stereo(), true)
+    #endif
+                          .withOutput ("Output", juce::AudioChannelSet::stereo(), true)
+#endif
+              ),
+      apvts (*this, nullptr, "Parameters", createParameterLayout())
 {
 }
 
@@ -26,29 +27,29 @@ const juce::String PluginProcessor::getName() const
 
 bool PluginProcessor::acceptsMidi() const
 {
-   #if JucePlugin_WantsMidiInput
+#if JucePlugin_WantsMidiInput
     return true;
-   #else
+#else
     return false;
-   #endif
+#endif
 }
 
 bool PluginProcessor::producesMidi() const
 {
-   #if JucePlugin_ProducesMidiOutput
+#if JucePlugin_ProducesMidiOutput
     return true;
-   #else
+#else
     return false;
-   #endif
+#endif
 }
 
 bool PluginProcessor::isMidiEffect() const
 {
-   #if JucePlugin_IsMidiEffect
+#if JucePlugin_IsMidiEffect
     return true;
-   #else
+#else
     return false;
-   #endif
+#endif
 }
 
 double PluginProcessor::getTailLengthSeconds() const
@@ -58,8 +59,8 @@ double PluginProcessor::getTailLengthSeconds() const
 
 int PluginProcessor::getNumPrograms()
 {
-    return 1;   // NB: some hosts don't cope very well if you tell them there are 0 programs,
-                // so this should be at least 1, even if you're not really implementing programs.
+    return 1; // NB: some hosts don't cope very well if you tell them there are 0 programs,
+        // so this should be at least 1, even if you're not really implementing programs.
 }
 
 int PluginProcessor::getCurrentProgram()
@@ -99,33 +100,33 @@ void PluginProcessor::releaseResources()
 
 bool PluginProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
-  #if JucePlugin_IsMidiEffect
+#if JucePlugin_IsMidiEffect
     juce::ignoreUnused (layouts);
     return true;
-  #else
+#else
     // This is the place where you check if the layout is supported.
     // In this template code we only support mono or stereo.
     if (layouts.getMainOutputChannelSet() != juce::AudioChannelSet::mono()
-     && layouts.getMainOutputChannelSet() != juce::AudioChannelSet::stereo())
+        && layouts.getMainOutputChannelSet() != juce::AudioChannelSet::stereo())
         return false;
 
-    // This checks if the input layout matches the output layout
-   #if ! JucePlugin_IsSynth
+        // This checks if the input layout matches the output layout
+    #if !JucePlugin_IsSynth
     if (layouts.getMainOutputChannelSet() != layouts.getMainInputChannelSet())
         return false;
-   #endif
+    #endif
 
     return true;
-  #endif
+#endif
 }
 
 void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer,
-                                              juce::MidiBuffer& midiMessages)
+    juce::MidiBuffer& midiMessages)
 {
     juce::ignoreUnused (midiMessages);
 
     juce::ScopedNoDenormals noDenormals;
-    auto totalNumInputChannels  = getTotalNumInputChannels();
+    auto totalNumInputChannels = getTotalNumInputChannels();
     auto totalNumOutputChannels = getTotalNumOutputChannels();
 
     // In case we have more outputs than inputs, this code clears any output
@@ -148,6 +149,42 @@ void PluginProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         auto* channelData = buffer.getWritePointer (channel);
         juce::ignoreUnused (channelData);
         // ..do something to the data...
+    }
+    
+
+    if (auto* playhead = getPlayHead())
+    {
+        // Try and get the playhead position.
+        if (auto position = playhead->getPosition())
+        {
+            // Check if position has a total amount of samples elapsed.
+            if (position->getTimeInSamples().hasValue() && position->getIsPlaying())
+            {
+                // Get total amount of samples elapsed.
+                juce::int64 currentSample = *position->getTimeInSamples();
+
+                if (auto bpm = position->getBpm())
+                {
+                    // Get the beats per second. Bpm/1 second.
+                    auto beatsPerSecond = *bpm / 60.0f;
+                    // Workout how many samples in 1 beat.
+                    auto samplesPerBeat = (getSampleRate()/beatsPerSecond) /2;
+                    
+                    // Get the ceiling of current samples/samplesPerBeat. i.e the next whole number.
+                    // if it was std::ceil(82000 / 44100) we would get 2.
+                    // 2 * 44100 = 88200.
+                    // So we know our next beat should be on 88200.
+                    auto nextBeatSamples = std::ceil(currentSample/samplesPerBeat) * samplesPerBeat;
+                    std::cout << nextBeatSamples << std::endl;
+                    
+                    // Check if nextBeatSamples 82200 >= 88200 AND 88200 < 82000 + buffer.getNumSamples() (82000 + 64) 82064.
+                    if(nextBeatSamples >= currentSample && nextBeatSamples < currentSample + buffer.getNumSamples()){
+                        auto offsetInBuffer = static_cast<int>(nextBeatSamples - currentSample);
+                        midiMessages.addEvent(juce::MidiMessage::noteOn(1, , 1.0f), offsetInBuffer);
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -183,4 +220,18 @@ void PluginProcessor::setStateInformation (const void* data, int sizeInBytes)
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {
     return new PluginProcessor();
+}
+
+juce::AudioProcessorValueTreeState::ParameterLayout PluginProcessor::createParameterLayout()
+{
+    std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
+
+    params.push_back (std::make_unique<juce::AudioParameterInt> (
+        juce::ParameterID { "currentNote", 1 },
+        "Current Note",
+        -1,
+        127,
+        -1));
+
+    return { params.begin(), params.end() };
 }
